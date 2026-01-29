@@ -21,8 +21,9 @@ const App: React.FC = () => {
   const [jars, setJars] = useState<Jars>({ essential: 80000, hobbies: 70000, savings: 50000 });
   const [initialBudget, setInitialBudget] = useState<Jars | null>(null);
   const [history, setHistory] = useState<LogEntry[]>([]);
-  const [currentEvent, setCurrentEvent] = useState<LogEntry | null>(null);
-  const [showEvent, setShowEvent] = useState<boolean>(false);
+  const [currentEvents, setCurrentEvents] = useState<RandomEvent[]>([]);
+  const [currentChoiceLog, setCurrentChoiceLog] = useState<{label: string, cost: number, category: keyof Jars} | null>(null);
+  const [showEventModal, setShowEventModal] = useState<boolean>(false);
 
   const totalAllocated = jars.essential + jars.hobbies + jars.savings;
   const isBudgetValid = totalAllocated === INITIAL_TOTAL;
@@ -48,49 +49,110 @@ const App: React.FC = () => {
 
   const handleChoice = (option: { label: string, cost: number, category: keyof Jars }) => {
     const tempJars = { ...jars };
+    
+    // Process primary choice
     tempJars[option.category] -= option.cost;
 
-    const event = EVENTS[Math.floor(Math.random() * EVENTS.length)];
-    let eventAmt = event.amount;
-
-    if (eventAmt < 0) {
-      let costToCover = Math.abs(eventAmt);
-      if (tempJars.savings >= costToCover) {
-        tempJars.savings -= costToCover;
-      } else {
-        costToCover -= tempJars.savings;
-        tempJars.savings = 0;
-        if (tempJars.essential >= costToCover) {
-          tempJars.essential -= costToCover;
-        } else {
-          costToCover -= tempJars.essential;
-          tempJars.essential = 0;
-          tempJars.hobbies -= costToCover;
-        }
-      }
-    } else {
-      tempJars.savings += eventAmt;
+    // Determine number of events (1 or 2)
+    const numEvents = Math.random() > 0.5 ? 2 : 1;
+    const selectedEvents: RandomEvent[] = [];
+    const availableEvents = [...EVENTS];
+    
+    for (let i = 0; i < numEvents; i++) {
+      const idx = Math.floor(Math.random() * availableEvents.length);
+      selectedEvents.push(availableEvents[idx]);
+      availableEvents.splice(idx, 1);
     }
+
+    // Process all selected events
+    selectedEvents.forEach(event => {
+      let eventAmt = event.amount;
+      if (eventAmt < 0) {
+        let costToCover = Math.abs(eventAmt);
+        // Priority: Savings -> Essential -> Hobbies
+        if (tempJars.savings >= costToCover) {
+          tempJars.savings -= costToCover;
+        } else {
+          costToCover -= tempJars.savings;
+          tempJars.savings = 0;
+          if (tempJars.essential >= costToCover) {
+            tempJars.essential -= costToCover;
+          } else {
+            costToCover -= tempJars.essential;
+            tempJars.essential = 0;
+            tempJars.hobbies -= costToCover;
+          }
+        }
+      } else {
+        tempJars.savings += eventAmt;
+      }
+    });
+
+    const combinedEventDesc = selectedEvents.map(e => e.description).join(' & ');
+    const combinedEventAmt = selectedEvents.reduce((acc, e) => acc + e.amount, 0);
 
     const log: LogEntry = {
       day,
       choiceLabel: option.label,
       choiceCost: option.cost,
       choiceCategory: option.category,
-      eventDescription: event.description,
-      eventAmount: event.amount,
+      eventDescription: combinedEventDesc,
+      eventAmount: combinedEventAmt,
       jarsAfter: { ...tempJars }
     };
 
-    setCurrentEvent(log);
-    setShowEvent(true);
+    setCurrentChoiceLog(option);
+    setCurrentEvents(selectedEvents);
+    setShowEventModal(true);
   };
 
   const proceed = () => {
-    if (!currentEvent) return;
-    setJars(currentEvent.jarsAfter);
-    setHistory(prev => [currentEvent, ...prev]);
-    setShowEvent(false);
+    if (!currentChoiceLog || currentEvents.length === 0) return;
+    
+    const lastJars = history.length > 0 ? history[0].jarsAfter : initialBudget!;
+    const finalJars = { ...jars }; // This should be calculated from the handleChoice but we need state consistency
+    
+    // We already have the final state in the log entry technically
+    // To keep it simple, we just apply the log's jars
+    const finalLogJars = history[0] ? history[0].jarsAfter : jars; // wait this is tricky
+    // Better: handleChoice updates a local "nextJars" and proceed sets it to jars.
+  };
+
+  // Redefining proceed for clarity with the handleChoice local state
+  const handleProceed = () => {
+    // In our handleChoice we were working with tempJars but not setting state yet
+    // Let's actually use a log entry as the source of truth for the next state
+    const combinedEventDesc = currentEvents.map(e => e.description).join(' & ');
+    const combinedEventAmt = currentEvents.reduce((acc, e) => acc + e.amount, 0);
+
+    // Recalculate tempJars purely for the log (it matches the handleChoice logic)
+    const tempJars = { ...jars };
+    tempJars[currentChoiceLog!.category] -= currentChoiceLog!.cost;
+    currentEvents.forEach(event => {
+        let eventAmt = event.amount;
+        if (eventAmt < 0) {
+          let costToCover = Math.abs(eventAmt);
+          if (tempJars.savings >= costToCover) { tempJars.savings -= costToCover; } 
+          else { costToCover -= tempJars.savings; tempJars.savings = 0;
+            if (tempJars.essential >= costToCover) { tempJars.essential -= costToCover; } 
+            else { costToCover -= tempJars.essential; tempJars.essential = 0; tempJars.hobbies -= costToCover; }
+          }
+        } else { tempJars.savings += eventAmt; }
+    });
+
+    const log: LogEntry = {
+        day,
+        choiceLabel: currentChoiceLog!.label,
+        choiceCost: currentChoiceLog!.cost,
+        choiceCategory: currentChoiceLog!.category,
+        eventDescription: combinedEventDesc,
+        eventAmount: combinedEventAmt,
+        jarsAfter: { ...tempJars }
+    };
+
+    setJars(tempJars);
+    setHistory(prev => [log, ...prev]);
+    setShowEventModal(false);
 
     if (day < TOTAL_DAYS) {
       startDayTransition(day + 1);
@@ -109,7 +171,7 @@ const App: React.FC = () => {
   }, [totalBalance, jars, initialBudget]);
 
   const JarCard = ({ name, amount, color, icon, initial }: { name: string, amount: number, color: string, icon: string, initial: number }) => {
-    const fillPercent = Math.max(0, Math.min(100, (amount / initial) * 100));
+    const fillPercent = Math.max(0, Math.min(100, (amount / (initial || 1)) * 100));
     return (
       <div className="flex-1 bg-white rounded-3xl p-4 shadow-lg border-2 border-slate-50 flex flex-col items-center gap-3 relative overflow-hidden group">
         <div className={`absolute bottom-0 left-0 right-0 ${color} opacity-10 liquid-fill`} style={{ height: `${fillPercent}%` }} />
@@ -128,7 +190,7 @@ const App: React.FC = () => {
     <div className="min-h-screen p-4 md:p-8 flex items-center justify-center">
       <div className="max-w-6xl w-full bg-white/40 backdrop-blur-md rounded-[3rem] p-4 md:p-8 shadow-[0_32px_64px_-12px_rgba(0,0,0,0.1)] border border-white/50 aspect-16-9-container flex flex-col md:flex-row gap-8">
         
-        {/* Left/Main Side: Game Content */}
+        {/* Main Content Area */}
         <div className="flex-[2] flex flex-col relative bg-white rounded-[2.5rem] shadow-xl overflow-hidden border-4 border-white">
           
           {/* Progress Bar Top */}
@@ -142,10 +204,10 @@ const App: React.FC = () => {
 
           {/* Transition Screen */}
           {status === GameStatus.TRANSITION && (
-            <div className="absolute inset-0 z-50 bg-sky-600 flex flex-col items-center justify-center text-white p-8">
-              <div className="text-6xl mb-6 floating">📅</div>
+            <div className="absolute inset-0 z-50 bg-sky-600 flex flex-col items-center justify-center text-white p-8 animate-in fade-in duration-300">
+              <div className="text-7xl mb-6 floating">💤</div>
               <h2 className="text-5xl font-black mb-2">{DAYS_OF_WEEK[day - 1]}</h2>
-              <p className="text-sky-100 font-bold opacity-80">Mở mắt ra thôi Nam ơi!</p>
+              <p className="text-sky-100 font-bold opacity-80">Ngày mới bắt đầu...</p>
             </div>
           )}
 
@@ -153,83 +215,74 @@ const App: React.FC = () => {
           {status === GameStatus.START && (
             <div className="flex-1 p-12 flex flex-col items-center justify-center text-center gap-8 animate-in zoom-in duration-500">
               <div className="relative">
-                <div className="text-9xl floating">🎒</div>
-                <div className="absolute -top-4 -right-4 bg-yellow-400 text-white p-4 rounded-full shadow-lg border-4 border-white font-black">
-                  Lớp 7
-                </div>
+                <div className="text-9xl floating">👦</div>
+                <div className="absolute -top-4 -right-4 bg-yellow-400 text-white p-4 rounded-full shadow-lg border-4 border-white font-black">200K</div>
               </div>
               <div className="space-y-4">
-                <h2 className="text-4xl font-black text-slate-800">Thử Thách Quản Lý 200K</h2>
+                <h2 className="text-4xl font-black text-slate-800">Thử Thách Quản Lý Tiền Bạc</h2>
                 <p className="text-slate-500 text-lg leading-relaxed max-w-lg mx-auto">
-                  Chào mừng Nam đến với thử thách tài chính đầu đời! Bạn có 7 ngày và 200.000đ. Hãy học cách cân đối chi tiêu và tiết kiệm nhé!
+                  Chào Nam! Bạn có 200.000đ để chi tiêu trong 1 tuần. Hãy chia tiền vào 3 hũ và cố gắng giữ cho các hũ không bị trống nhé!
                 </p>
               </div>
               <button onClick={startBudgeting} className="w-full max-w-sm py-5 bg-sky-500 hover:bg-sky-600 text-white rounded-3xl font-black text-2xl shadow-2xl shadow-sky-200 transition-all active:scale-95">
-                BẮT ĐẦU NGAY!
+                BẮT ĐẦU CHIA HŨ
               </button>
             </div>
           )}
 
           {/* Budgeting Screen */}
           {status === GameStatus.BUDGETING && (
-            <div className="flex-1 p-8 md:p-12 flex flex-col gap-8 overflow-y-auto">
+            <div className="flex-1 p-8 flex flex-col gap-6 overflow-y-auto">
               <div className="text-center">
-                <h2 className="text-3xl font-black mb-2">Lập Kế Hoạch Tuần</h2>
-                <p className="text-slate-400 font-bold uppercase text-xs tracking-widest italic">Chia hũ tiền của bạn ngay nào</p>
+                <h2 className="text-3xl font-black">Thiết Lập Ngân Sách</h2>
+                <p className="text-slate-400 font-bold uppercase text-xs">Phải chia đủ {formatMoney(INITIAL_TOTAL)}</p>
               </div>
 
-              <div className="grid gap-6">
+              <div className="grid gap-4">
                 {[
                   { id: 'essential', label: 'Hũ Thiết Yếu (Ăn, Đi lại)', icon: '🍚', color: 'accent-emerald-500', bg: 'bg-emerald-50' },
-                  { id: 'hobbies', label: 'Hũ Sở Thích (Chơi, Quà)', icon: '🎮', color: 'accent-pink-500', bg: 'bg-pink-50' },
-                  { id: 'savings', label: 'Hũ Tiết Kiệm (Dự phòng)', icon: '💰', color: 'accent-amber-500', bg: 'bg-amber-50' }
+                  { id: 'hobbies', label: 'Hũ Sở Thích (Giải trí, Quà)', icon: '🎮', color: 'accent-pink-500', bg: 'bg-pink-50' },
+                  { id: 'savings', label: 'Hũ Tiết Kiệm (Phòng hờ)', icon: '💰', color: 'accent-amber-500', bg: 'bg-amber-50' }
                 ].map((item) => (
-                  <div key={item.id} className={`${item.bg} p-6 rounded-[2rem] border-2 border-white shadow-sm space-y-4 transition-transform hover:scale-[1.02]`}>
+                  <div key={item.id} className={`${item.bg} p-6 rounded-[2rem] border-2 border-white shadow-sm space-y-4`}>
                     <div className="flex justify-between items-center">
                       <div className="flex items-center gap-3">
                         <span className="text-3xl">{item.icon}</span>
                         <span className="font-black text-slate-700">{item.label}</span>
                       </div>
-                      <span className="text-xl font-black text-slate-900">{formatMoney(jars[item.id as keyof Jars])}</span>
+                      <span className="text-xl font-black">{formatMoney(jars[item.id as keyof Jars])}</span>
                     </div>
                     <input 
                       type="range" min="0" max="200000" step="5000"
                       value={jars[item.id as keyof Jars]}
                       onChange={(e) => setJars({...jars, [item.id]: parseInt(e.target.value)})}
-                      className={`w-full h-3 bg-white rounded-full appearance-none cursor-pointer shadow-inner ${item.color}`}
+                      className={`w-full h-3 bg-white rounded-full appearance-none cursor-pointer ${item.color}`}
                     />
                   </div>
                 ))}
               </div>
 
               <div className={`p-6 rounded-3xl border-4 flex items-center justify-between mt-auto ${isBudgetValid ? 'bg-green-500 border-green-200 text-white' : 'bg-red-50 border-red-200 text-red-600'}`}>
-                <div>
-                  <div className="text-xs font-black uppercase opacity-70">Tổng cộng phân bổ</div>
-                  <div className="text-3xl font-black">{formatMoney(totalAllocated)}</div>
-                </div>
+                <div className="text-2xl font-black">Tổng: {formatMoney(totalAllocated)}</div>
                 {isBudgetValid ? (
-                  <button onClick={confirmBudget} className="bg-white text-green-600 px-8 py-4 rounded-2xl font-black text-lg shadow-xl hover:scale-105 active:scale-95 transition-all">
+                  <button onClick={confirmBudget} className="bg-white text-green-600 px-8 py-3 rounded-2xl font-black text-lg shadow-xl hover:scale-105 active:scale-95 transition-all">
                     XÁC NHẬN ✅
                   </button>
                 ) : (
-                  <div className="text-right font-black max-w-[150px] leading-tight text-sm">
-                    {totalAllocated > INITIAL_TOTAL ? 'Vượt quá 200k rồi!' : 'Vẫn còn tiền chưa chia!'}
-                  </div>
+                  <span className="font-bold">Cần đủ 200k!</span>
                 )}
               </div>
             </div>
           )}
 
           {/* Playing Screen */}
-          {status === GameStatus.PLAYING && !showEvent && (
+          {status === GameStatus.PLAYING && !showEventModal && (
             <div className="flex-1 p-8 md:p-12 flex flex-col gap-8 animate-in fade-in duration-500">
               <div className="flex items-center gap-6">
-                <div className="w-24 h-24 bg-sky-100 rounded-[2rem] flex items-center justify-center text-5xl shadow-inner border-4 border-white">
-                  👦
-                </div>
+                <div className="w-24 h-24 bg-sky-100 rounded-[2rem] flex items-center justify-center text-5xl shadow-inner border-4 border-white">🏫</div>
                 <div className="space-y-1">
-                  <div className="text-sky-500 font-black uppercase text-sm tracking-widest">{DAYS_OF_WEEK[day - 1]}</div>
-                  <h2 className="text-3xl font-black text-slate-800 leading-tight">{SCENARIOS[day - 1].question}</h2>
+                  <div className="text-sky-500 font-black uppercase text-sm">{DAYS_OF_WEEK[day - 1]}</div>
+                  <h2 className="text-3xl font-black text-slate-800">{SCENARIOS[day - 1].question}</h2>
                 </div>
               </div>
 
@@ -238,22 +291,20 @@ const App: React.FC = () => {
                   <button 
                     key={i}
                     onClick={() => handleChoice(opt)}
-                    className={`relative p-8 rounded-[2.5rem] border-4 border-slate-50 text-left transition-all hover:scale-[1.03] hover:shadow-2xl active:scale-95 group overflow-hidden ${opt.category === 'essential' ? 'bg-emerald-50 hover:border-emerald-400' : 'bg-rose-50 hover:border-rose-400'}`}
+                    className={`relative p-8 rounded-[2.5rem] border-4 border-slate-50 text-left transition-all hover:scale-[1.03] active:scale-95 group overflow-hidden ${opt.category === 'essential' ? 'bg-emerald-50 hover:border-emerald-400' : 'bg-rose-50 hover:border-rose-400'}`}
                   >
-                    <div className="absolute top-4 right-4 text-4xl opacity-10 group-hover:opacity-100 group-hover:rotate-12 transition-all">
-                      {opt.category === 'essential' ? '🍚' : '🎮'}
+                    <div className="absolute top-4 right-4 text-4xl opacity-10 group-hover:opacity-100 transition-all">
+                        {opt.category === 'essential' ? '🍚' : '🎮'}
                     </div>
-                    <div className="flex flex-col h-full justify-between gap-4">
-                      <div>
-                        <div className={`text-xs font-black uppercase tracking-widest mb-1 ${opt.category === 'essential' ? 'text-emerald-500' : 'text-rose-500'}`}>
-                          Dùng hũ {opt.category === 'essential' ? 'Thiết yếu' : 'Sở thích'}
+                    <div className="flex flex-col h-full justify-between">
+                      <div className="space-y-2">
+                        <div className={`text-xs font-black uppercase ${opt.category === 'essential' ? 'text-emerald-500' : 'text-rose-500'}`}>
+                          Hũ {opt.category === 'essential' ? 'Thiết yếu' : 'Sở thích'}
                         </div>
-                        <div className="text-2xl font-black text-slate-800 mb-2">{opt.label}</div>
+                        <div className="text-2xl font-black text-slate-800">{opt.label}</div>
                         <p className="text-slate-500 text-sm italic">{opt.description}</p>
                       </div>
-                      <div className="text-2xl font-black text-red-600">
-                        -{formatMoney(opt.cost)}
-                      </div>
+                      <div className="text-2xl font-black text-red-600">-{formatMoney(opt.cost)}</div>
                     </div>
                   </button>
                 ))}
@@ -261,107 +312,101 @@ const App: React.FC = () => {
             </div>
           )}
 
-          {/* Event Overlay */}
-          {showEvent && currentEvent && (
-            <div className="flex-1 p-12 bg-amber-50 flex flex-col items-center justify-center text-center gap-8 animate-in zoom-in-95 duration-300">
-              <div className="text-9xl floating">
-                {currentEvent.eventAmount > 0 ? '🎁' : currentEvent.eventAmount < 0 ? '💥' : '🔔'}
-              </div>
-              <div className="space-y-4 max-w-md">
-                <div className="inline-block bg-amber-400 text-white px-6 py-2 rounded-full font-black uppercase tracking-widest shadow-lg">
-                  BIẾN CỐ BẤT NGỜ!
-                </div>
-                <h2 className="text-3xl font-black text-slate-800 leading-tight">"{currentEvent.eventDescription}"</h2>
-              </div>
-              
-              <div className="bg-white p-8 rounded-[2.5rem] border-4 border-amber-200 shadow-xl w-full max-w-sm">
-                <div className="text-xs font-black text-slate-400 uppercase mb-2 tracking-widest">Biến động ví</div>
-                <div className={`text-4xl font-black ${currentEvent.eventAmount >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                  {currentEvent.eventAmount === 0 ? 'Mọi thứ vẫn ổn' : (currentEvent.eventAmount > 0 ? '+' : '-') + formatMoney(Math.abs(currentEvent.eventAmount))}
+          {/* Event Modal */}
+          {showEventModal && (
+            <div className="flex-1 p-8 bg-amber-50 flex flex-col items-center justify-center text-center gap-6 animate-in zoom-in-95 duration-300">
+              <div className="text-8xl floating">⚡</div>
+              <div className="space-y-4">
+                <div className="inline-block bg-amber-400 text-white px-6 py-2 rounded-full font-black uppercase tracking-widest shadow-lg">Có chuyện gì đó vừa xảy ra!</div>
+                <div className="space-y-3 px-8">
+                  {currentEvents.map((ev, idx) => (
+                    <div key={idx} className="bg-white/80 p-4 rounded-2xl border-2 border-amber-200 shadow-sm">
+                      <p className="text-xl font-black text-slate-800">"{ev.description}"</p>
+                      <p className={`text-lg font-black ${ev.amount > 0 ? 'text-green-500' : ev.amount < 0 ? 'text-red-500' : 'text-slate-400'}`}>
+                        {ev.amount === 0 ? 'Mọi thứ vẫn ổn' : (ev.amount > 0 ? '+' : '-') + formatMoney(Math.abs(ev.amount))}
+                      </p>
+                    </div>
+                  ))}
                 </div>
               </div>
-
-              <button onClick={proceed} className="w-full max-w-sm py-5 bg-slate-900 hover:bg-slate-800 text-white rounded-3xl font-black text-xl shadow-2xl active:scale-95 transition-all">
-                TIẾP TỤC ĐI TIẾP
+              <button onClick={handleProceed} className="w-full max-w-sm py-5 bg-slate-900 hover:bg-slate-800 text-white rounded-3xl font-black text-xl shadow-2xl active:scale-95 transition-all">
+                XEM KẾT QUẢ NGÀY MỚI
               </button>
             </div>
           )}
 
           {/* Summary Screen */}
           {status === GameStatus.SUMMARY && (
-            <div className="flex-1 p-12 flex flex-col items-center justify-center text-center gap-8 overflow-y-auto">
-              <div className="text-9xl">
-                {totalBalance > 0 ? '🎉' : '🥀'}
-              </div>
-              <div className="space-y-2">
-                <h2 className="text-4xl font-black">Kết Thúc Hành Trình!</h2>
+            <div className="flex-1 p-8 flex flex-col items-center justify-center text-center gap-6 overflow-y-auto animate-in fade-in duration-1000">
+              <div className="text-9xl">{totalBalance > 0 ? '🏆' : '💸'}</div>
+              <div className="space-y-1">
+                <h2 className="text-4xl font-black">Tổng Kết 1 Tuần</h2>
                 <div className="text-5xl font-black text-sky-600 tabular-nums">{formatMoney(totalBalance)}</div>
               </div>
               
-              <div className="bg-slate-50 p-8 rounded-[2.5rem] max-w-lg border-4 border-white shadow-inner">
-                <p className="text-lg text-slate-600 italic leading-relaxed">"{getAdvice}"</p>
+              <div className="bg-slate-50 p-6 rounded-[2.5rem] max-w-2xl w-full border-4 border-white shadow-inner grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="bg-white p-4 rounded-2xl shadow-sm border-2 border-slate-100">
+                  <div className="text-3xl mb-1">🍚</div>
+                  <div className="text-[10px] font-black text-slate-400 uppercase">Hũ Thiết yếu</div>
+                  <div className={`text-sm font-black ${jars.essential < 0 ? 'text-red-500' : 'text-green-600'}`}>
+                    {jars.essential < 0 ? 'Bị thâm hụt!' : 'Cân đối tốt!'}
+                  </div>
+                  <div className="text-xs text-slate-400">Còn: {formatMoney(jars.essential)}</div>
+                </div>
+                <div className="bg-white p-4 rounded-2xl shadow-sm border-2 border-slate-100">
+                  <div className="text-3xl mb-1">🎮</div>
+                  <div className="text-[10px] font-black text-slate-400 uppercase">Hũ Sở thích</div>
+                  <div className={`text-sm font-black ${jars.hobbies < (initialBudget?.hobbies || 0) * 0.2 ? 'text-amber-500' : 'text-sky-600'}`}>
+                    {jars.hobbies < (initialBudget?.hobbies || 0) * 0.2 ? 'Tiêu gần hết!' : 'Chi tiêu hợp lý!'}
+                  </div>
+                  <div className="text-xs text-slate-400">Còn: {formatMoney(jars.hobbies)}</div>
+                </div>
+                <div className="bg-white p-4 rounded-2xl shadow-sm border-2 border-slate-100">
+                  <div className="text-3xl mb-1">💰</div>
+                  <div className="text-[10px] font-black text-slate-400 uppercase">Hũ Tiết kiệm</div>
+                  <div className={`text-sm font-black ${jars.savings >= (initialBudget?.savings || 0) ? 'text-green-600' : 'text-red-500'}`}>
+                    {jars.savings >= (initialBudget?.savings || 0) ? 'Giữ được gốc!' : 'Hụt mất vốn!'}
+                  </div>
+                  <div className="text-xs text-slate-400">Còn: {formatMoney(jars.savings)}</div>
+                </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-6 w-full max-w-md">
-                <div className="bg-white p-4 rounded-3xl shadow-md border-2 border-slate-100">
-                  <div className="text-[10px] font-black text-slate-400 uppercase">Tiết kiệm dự định</div>
-                  <div className="text-lg font-black">{formatMoney(initialBudget?.savings || 0)}</div>
-                </div>
-                <div className="bg-white p-4 rounded-3xl shadow-md border-2 border-slate-100">
-                  <div className="text-[10px] font-black text-slate-400 uppercase">Tiết kiệm thực tế</div>
-                  <div className={`text-lg font-black ${jars.savings >= (initialBudget?.savings || 0) ? 'text-green-600' : 'text-red-500'}`}>
-                    {formatMoney(jars.savings)}
-                  </div>
-                </div>
-              </div>
+              <p className="text-lg text-slate-600 italic px-8">"{getAdvice}"</p>
 
               <button onClick={() => window.location.reload()} className="w-full max-w-sm py-5 bg-sky-500 hover:bg-sky-600 text-white rounded-3xl font-black text-xl shadow-2xl transition-all">
-                CHƠI LẠI TUẦN MỚI
+                THỬ LẠI TUẦN SAU
               </button>
             </div>
           )}
         </div>
 
-        {/* Right Side: Status Sidebar (Visible Play/Summary) */}
+        {/* Status Sidebar */}
         {(status === GameStatus.PLAYING || status === GameStatus.SUMMARY || status === GameStatus.TRANSITION) && (
           <div className="hidden lg:flex flex-col w-80 gap-6 animate-in slide-in-from-right-8 duration-700">
-            
-            {/* Jars Section */}
             <div className="bg-white/60 p-6 rounded-[2.5rem] shadow-lg border border-white flex flex-col gap-4">
-              <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest ml-2 mb-2">Trạng thái hũ tiền</h3>
+              <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest ml-2 mb-2">Số dư hũ tiền</h3>
               <JarCard name="Thiết yếu" amount={jars.essential} initial={initialBudget?.essential || 1} color="bg-emerald-400" icon="🍚" />
               <JarCard name="Sở thích" amount={jars.hobbies} initial={initialBudget?.hobbies || 1} color="bg-rose-400" icon="🎮" />
               <JarCard name="Tiết kiệm" amount={jars.savings} initial={initialBudget?.savings || 1} color="bg-amber-400" icon="💰" />
             </div>
 
-            {/* Mini Log Section */}
-            <div className="bg-white/60 p-6 rounded-[2.5rem] shadow-lg border border-white flex-1 overflow-hidden flex flex-col">
-              <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest ml-2 mb-4">Lịch sử chi tiêu</h3>
+            <div className="bg-white/60 p-6 rounded-[2.5rem] shadow-lg border border-white flex-1 flex flex-col overflow-hidden">
+              <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest ml-2 mb-4">Lịch sử sự kiện</h3>
               <div className="flex-1 overflow-y-auto pr-2 space-y-3 scrollbar-none">
-                {history.length === 0 && <div className="text-slate-300 text-center py-8 italic text-sm">Chưa có hoạt động</div>}
                 {history.map((h, i) => (
-                  <div key={i} className="bg-white/80 p-4 rounded-2xl shadow-sm border border-slate-100 text-xs flex justify-between items-center animate-in fade-in">
-                    <div>
-                      <div className="font-black text-slate-400 uppercase text-[9px]">Ngày {h.day}</div>
-                      <div className="font-bold text-slate-700 truncate w-32">{h.choiceLabel}</div>
-                    </div>
-                    <div className="text-right">
-                      <div className="font-black text-slate-800">{formatMoney(h.jarsAfter.essential + h.jarsAfter.hobbies + h.jarsAfter.savings)}</div>
-                      <div className="text-[9px] font-bold text-slate-400">CÒN LẠI</div>
+                  <div key={i} className="bg-white/80 p-4 rounded-2xl shadow-sm border border-slate-100 text-xs flex justify-between items-center">
+                    <div className="w-full">
+                      <div className="font-black text-slate-400 uppercase text-[9px] mb-1">Ngày {h.day} - {h.choiceLabel}</div>
+                      <div className="text-slate-600 italic leading-tight">{h.eventDescription}</div>
                     </div>
                   </div>
                 ))}
+                {history.length === 0 && <div className="text-slate-300 text-center py-8 italic text-sm">Chưa có sự kiện</div>}
               </div>
             </div>
           </div>
         )}
-
       </div>
-
-      {/* Decorative Floating Background Elements */}
-      <div className="fixed top-10 left-10 text-8xl opacity-10 floating pointer-events-none select-none">✏️</div>
-      <div className="fixed bottom-10 right-10 text-8xl opacity-10 floating pointer-events-none select-none" style={{ animationDelay: '1s' }}>📓</div>
-      <div className="fixed top-1/2 right-4 text-6xl opacity-10 floating pointer-events-none select-none" style={{ animationDelay: '1.5s' }}>📐</div>
 
       <style>{`
         .scrollbar-none::-webkit-scrollbar { display: none; }
@@ -374,9 +419,7 @@ const App: React.FC = () => {
           border-radius: 50%;
           box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1);
           cursor: pointer;
-          transition: transform 0.2s;
         }
-        input[type='range']::-webkit-slider-thumb:hover { transform: scale(1.1); }
       `}</style>
     </div>
   );
